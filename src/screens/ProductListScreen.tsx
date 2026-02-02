@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -36,21 +36,26 @@ export default function ProductListScreen({ navigation }: any) {
 
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("all");
+  const [category, setCategory] = useState("");
+
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(handler);
+  }, [search]);
 
   useEffect(() => {
+    const loadData = () => {
+      dispatch(loadFavourites());
+      dispatch(fetchCategories());
+
+      if (!cachedAt || Date.now() - cachedAt >= 5 * 60 * 1000) {
+        dispatch(fetchProducts());
+      }
+    };
+
     loadData();
-  }, []);
-
-  const loadData = () => {
-    dispatch(loadFavourites());
-    dispatch(fetchCategories());
-
-    if (cachedAt && Date.now() - cachedAt < 5 * 60 * 1000) {
-    } else {
-      dispatch(fetchProducts());
-    }
-  };
+  }, [dispatch, cachedAt]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -62,19 +67,35 @@ export default function ProductListScreen({ navigation }: any) {
     setRefreshing(false);
   };
 
-  const filteredProducts = products.filter((product) => {
-    const matchesSearch = product.title
-      .toLowerCase()
-      .includes(search.toLowerCase().trim());
-    const matchesCategory = category === "all" || product.category === category;
-    return matchesSearch && matchesCategory;
-  });
+  const getDisplayLabel = (cat: string) => {
+    if (cat === "all") return "All";
+    if (cat === "") return "Category";
+
+    let formatted = cat.charAt(0).toUpperCase() + cat.slice(1);
+
+    return formatted.length > 14 ? formatted.substring(0, 11) + "…" : formatted;
+  };
+
+  const filteredProducts = useMemo(
+    () =>
+      products.filter((product) => {
+        const matchesSearch = product.title
+          .toLowerCase()
+          .includes(debouncedSearch.toLowerCase());
+        const matchesCategory =
+          category === "" ||
+          category === "all" ||
+          product.category === category;
+        return matchesSearch && matchesCategory;
+      }),
+    [products, debouncedSearch, category],
+  );
 
   if (status === "loading" && products.length === 0) {
     return (
       <View style={styles.fullScreenLoader}>
         <ActivityIndicator size="large" color="#0066cc" />
-        <Text style={styles.loaderText}>Loading products...</Text>
+        <Text style={styles.loaderText}>Loading…</Text>
       </View>
     );
   }
@@ -82,11 +103,13 @@ export default function ProductListScreen({ navigation }: any) {
   if (error && products.length === 0) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={{ color: "red", marginBottom: 16 }}>
-          No internet connection
+        <Text style={{ color: "red", marginBottom: 8, fontSize: 15 }}>
+          No Internet connection
         </Text>
         <TouchableOpacity onPress={() => dispatch(fetchProducts())}>
-          <Text style={{ color: "#0066cc", fontWeight: "600" }}>Retry</Text>
+          <Text style={{ color: "#0066cc", fontWeight: "600", fontSize: 15 }}>
+            Retry
+          </Text>
         </TouchableOpacity>
       </View>
     );
@@ -94,50 +117,50 @@ export default function ProductListScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <TextInput
-        style={styles.searchInput}
-        placeholder="Search products..."
-        value={search}
-        onChangeText={setSearch}
-        autoCapitalize="none"
-        autoCorrect={false}
-        returnKeyType="search"
-      />
+      <View style={styles.topRow}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search…"
+          value={search}
+          onChangeText={setSearch}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+        />
+
+        {categoriesStatus === "loading" && categories.length <= 1 ? (
+          <View style={styles.miniLoader}>
+            <ActivityIndicator size="small" color="#888" />
+          </View>
+        ) : (
+          <View style={styles.pickerWrapper}>
+            <Picker
+              selectedValue={category}
+              onValueChange={setCategory}
+              style={styles.picker}
+              mode="dropdown"
+              dropdownIconColor="#666"
+              itemStyle={styles.pickerItem}
+            >
+              <Picker.Item label="Category" value="" />
+              <Picker.Item label="All" value="all" />
+              {categories
+                .filter((cat) => cat !== "all")
+                .map((cat) => (
+                  <Picker.Item
+                    key={cat}
+                    label={getDisplayLabel(cat)}
+                    value={cat}
+                  />
+                ))}
+            </Picker>
+          </View>
+        )}
+      </View>
 
       {isOfflineData && (
         <View style={styles.offlineBanner}>
-          <Text style={styles.offlineText}>
-            You are offline. Showing cached products.
-          </Text>
-        </View>
-      )}
-
-      {categoriesStatus === "loading" && categories.length <= 1 ? (
-        <View style={styles.categoryLoader}>
-          <ActivityIndicator size="small" color="#666" />
-          <Text style={styles.categoryLoaderText}>Loading categories...</Text>
-        </View>
-      ) : (
-        <View style={styles.pickerContainer}>
-          <Picker
-            selectedValue={category}
-            onValueChange={(itemValue) => setCategory(itemValue)}
-            style={styles.picker}
-            dropdownIconColor="#555"
-            enabled={categories.length > 1}
-          >
-            {categories.map((cat) => (
-              <Picker.Item
-                key={cat}
-                label={
-                  cat === "all"
-                    ? "All Categories"
-                    : cat.charAt(0).toUpperCase() + cat.slice(1)
-                }
-                value={cat}
-              />
-            ))}
-          </Picker>
+          <Text style={styles.offlineText}>Offline – cached data</Text>
         </View>
       )}
 
@@ -162,16 +185,14 @@ export default function ProductListScreen({ navigation }: any) {
         )}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              {status === "loading" ? (
-                <>
-                  <ActivityIndicator size="small" color="#888" />
-                  <Text> Loading products...</Text>
-                </>
-              ) : (
-                "No products found"
-              )}
-            </Text>
+            {status === "loading" ? (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <ActivityIndicator size="small" color="#888" />
+                <Text style={{ marginLeft: 6, fontSize: 14 }}>Loading…</Text>
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>No products</Text>
+            )}
           </View>
         }
       />
@@ -182,9 +203,72 @@ export default function ProductListScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 12,
+    padding: 8,
     backgroundColor: "#f9f9f9",
   },
+
+  topRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 6,
+  },
+
+  searchInput: {
+    flex: 1.4,
+    height: 40,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    backgroundColor: "#fff",
+    fontSize: 14,
+  },
+
+  pickerWrapper: {
+    flex: 1,
+    height: 40,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    overflow: "hidden",
+    justifyContent: "center",
+  },
+
+  picker: {
+    height: 50,
+  },
+
+  pickerItem: {
+    fontSize: 13,
+    color: "#222",
+  },
+
+  miniLoader: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  offlineBanner: {
+    backgroundColor: "#ffebee",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginBottom: 6,
+  },
+  offlineText: {
+    color: "#c62828",
+    textAlign: "center",
+    fontSize: 12,
+  },
+
   fullScreenLoader: {
     flex: 1,
     justifyContent: "center",
@@ -192,69 +276,21 @@ const styles = StyleSheet.create({
     backgroundColor: "#f9f9f9",
   },
   loaderText: {
-    marginTop: 12,
-    fontSize: 16,
+    marginTop: 10,
+    fontSize: 14,
     color: "#666",
   },
+
   centerContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
   },
-  searchInput: {
-    height: 48,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    marginBottom: 12,
-    backgroundColor: "white",
-    fontSize: 16,
-  },
-  offlineBanner: {
-    backgroundColor: "#fdecea",
-    padding: 8,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  offlineText: {
-    color: "#b71c1c",
-    textAlign: "center",
-  },
-  categoryLoader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    height: 52,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 12,
-    backgroundColor: "white",
-    marginBottom: 16,
-  },
-  categoryLoaderText: {
-    marginLeft: 8,
-    color: "#666",
-  },
-  pickerContainer: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 12,
-    backgroundColor: "white",
-    marginBottom: 16,
-    overflow: "hidden",
-  },
-  picker: {
-    height: 52,
-  },
-  row: {
-    gap: 12,
-  },
-  listContent: {
-    paddingBottom: 24,
-    flexGrow: 1,
-  },
+
+  row: { gap: 8 },
+  listContent: { paddingBottom: 16, flexGrow: 1 },
+
   emptyContainer: {
     flex: 1,
     justifyContent: "center",
@@ -262,8 +298,8 @@ const styles = StyleSheet.create({
     paddingVertical: 60,
   },
   emptyText: {
-    textAlign: "center",
-    fontSize: 16,
+    fontSize: 14,
     color: "#777",
+    textAlign: "center",
   },
 });
